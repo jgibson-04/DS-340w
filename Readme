@@ -1,0 +1,229 @@
+## FraudSquad Reproduction and Length-Based Extension
+
+This project reproduces the FraudSquad pipeline for detecting LLM-generated spam reviews and introduces a small graph-based extension using review length as an additional structural signal.
+
+### Dataset
+
+The Amazon experiment uses:
+
+- 86,697 genuine reviews
+- 2,500 generated spam reviews
+- 89,197 total reviews
+
+Reviews are labeled as:
+
+- `0` = genuine
+- `1` = generated spam
+
+### Original FraudSquad Graph
+
+The original FraudSquad implementation constructs relationships between reviews using:
+
+- `user`
+- `product_star`
+- `product_month`
+
+These relations allow the graph neural network to learn both textual and relational patterns associated with fraudulent reviews.
+
+### Implementation Changes
+
+Several changes were made to improve reproducibility and allow the original FraudSquad code to run reliably in the local environment.
+
+#### BERT Embedding Checkpoints
+
+The original pipeline could recompute BERT embeddings each time the program was executed.
+
+The modified implementation:
+
+- Uses `bert-base-uncased`
+- Saves BERT embeddings periodically
+- Reloads previously generated embeddings on later runs
+- Prevents unnecessary BERT recomputation
+- Uses `model.eval()` during embedding generation
+
+Cached embeddings are stored under:
+
+```text
+cache/bert_base/
+```
+
+#### Internal BERT Cache Reuse
+
+FraudSquad contains another BERT embedding stage inside its model pipeline.
+
+This implementation was modified to reuse the previously generated embeddings when the number of cached reviews matches the current dataset.
+
+This significantly reduces runtime during repeated experiments.
+
+#### NumPy Array Compatibility
+
+Several arrays produced by pandas or NumPy were read-only and caused assignment errors during evaluation.
+
+Writable copies are now explicitly created before converting labels or modifying prediction targets.
+
+These changes correct execution issues without changing the FraudSquad architecture.
+
+---
+
+## Length-Based Graph Extension
+
+A second review-detection study motivated the use of review length as a proxy for writing effort.
+
+Each review is assigned to one of four length quartiles:
+
+```text
+Q1 = shortest 25% of reviews
+Q2 = 25–50%
+Q3 = 50–75%
+Q4 = longest 25%
+```
+
+Review length is calculated using the number of words in the review.
+
+An initial implementation attempted to directly connect all reviews belonging to the same length quartile. This created extremely large graph groups because each quartile contained approximately 22,000 reviews.
+
+Since FraudSquad converts a shared relationship into pairwise graph connections, the global length-quartile relationship produced an impractically dense graph.
+
+To avoid this problem, the final implementation uses a product-conditioned length relationship:
+
+```text
+product_length = product ID + length quartile
+```
+
+For example:
+
+```text
+ProductA_Q1
+ProductA_Q2
+ProductB_Q1
+ProductB_Q4
+```
+
+The modified graph therefore contains four relationships:
+
+```text
+user
+product_star
+product_month
+product_length
+```
+
+This allows reviews to be related by writing length while restricting those relationships to reviews of the same product.
+
+---
+
+## Running the Amazon Experiment
+
+Activate the project virtual environment:
+
+```powershell
+cd C:\Users\Wahab\OneDrive\Desktop\FraudSquad-5389
+.\.venv\Scripts\Activate.ps1
+```
+
+Verify the active Python interpreter:
+
+```powershell
+python -c "import sys; print(sys.executable)"
+```
+
+The interpreter should point to:
+
+```text
+FraudSquad-5389\.venv\Scripts\python.exe
+```
+
+Run the experiment using:
+
+```powershell
+python run_detect_amazon.py --device cpu
+```
+
+The main experiment uses:
+
+```yaml
+max_epochs: 50
+device: "cpu"
+lm: "bert-base-uncased"
+top_ratio: 0.03
+```
+
+---
+
+## Experimental Results
+
+The original FraudSquad reproduction produced:
+
+| Metric | Original FraudSquad |
+|---|---:|
+| AUC | 0.9954 |
+| Average Precision | 0.9621 |
+| Precision | 0.8621 |
+| Recall | 0.9227 |
+| F1 | 0.8914 |
+
+After adding the `product_length` relationship:
+
+| Metric | FraudSquad + Product-Length |
+|---|---:|
+| AUC | **0.9996** |
+| Average Precision | **0.9975** |
+| Precision | **0.9294** |
+| Recall | **0.9947** |
+| F1 | **0.9609** |
+
+The modified model improved all five reported metrics.
+
+The largest improvement was observed in recall:
+
+```text
+0.9227 → 0.9947
+```
+
+The F1-score also increased substantially:
+
+```text
+0.8914 → 0.9609
+```
+
+These results suggest that product-conditioned review length provides useful additional relational information on the Amazon dataset.
+
+However, the result should not be interpreted as evidence that review length universally improves AI-generated review detection. Generated reviews in this dataset may exhibit length patterns that differ from genuine reviews, so additional cross-domain testing is necessary.
+
+---
+
+## Main Files
+
+```text
+run_detect_amazon.py
+    Main Amazon experiment and product-length graph extension
+
+preprocess/preprocess.py
+    Data preprocessing, BERT embedding generation, graph construction,
+    and feature extraction
+
+methods/fraudsquad_src/model_handler.py
+    FraudSquad training and evaluation pipeline
+
+config/amazon_cfg_0503.yml
+    Amazon experiment configuration
+
+cache/bert_base/
+    Saved BERT embedding checkpoints
+```
+
+## Summary
+
+The project preserves the original FraudSquad neural architecture while making the implementation easier to reproduce and introducing one additional graph relationship based on review writing length.
+
+The final graph contains:
+
+```text
+Original:
+user + product_star + product_month
+
+Modified:
+user + product_star + product_month + product_length
+```
+
+On the Amazon experiment, the modified version increased the final F1-score from approximately 0.89 to 0.96 while achieving approximately 99.5% recall.
